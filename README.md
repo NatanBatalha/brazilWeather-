@@ -1,2 +1,3 @@
 # brazilWeather-
 Análises de dados climáticos do Brasil (INMET / Kaggle) com Python, focadas em estatística descritiva, visualização e modelos de classificação de chuva.
+O brazilWeather é um projeto de análise de dados climáticos do Brasil usando o dataset Brazil Weather, Automatic Stations (2000–2021) do Kaggle. A ideia é montar um pipeline em Python (Pandas, Seaborn, Scikit-Learn) pra fazer análise univariada, multivariada, visualizações e modelos de classificação focados em prever se vai chover ou não em um determinado dia/estação, e usar o Power BI na etapa final de apresentação dos resultados.
