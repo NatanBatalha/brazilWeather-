@@ -1,0 +1,13 @@
+# Ambiente virtual
+.venv/
+
+# Arquivos temporários / cache
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Dados brutos grandes (Kaggle)
+data/
+
+# Outros
+*.log
