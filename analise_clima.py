@@ -58,7 +58,7 @@ def carregar_estacoes(caminho_stations: str) -> pd.DataFrame:
     }
     df_stations = df_stations.rename(columns=rename_map)
 
-    # Garantir tipos numéricos
+    # Aqui vamos garantir tipos numericos
     for col in ["latitude", "longitude", "altitude_m"]:
         df_stations[col] = pd.to_numeric(df_stations[col], errors="coerce")
 
@@ -107,7 +107,7 @@ def carregar_dados_clima_amostrado(
 
 
 def preparar_dataframe(df_raw: pd.DataFrame, df_stations: pd.DataFrame) -> pd.DataFrame:
-    # Renomear colunas
+    # Aqui meus caros vamos mudar os nomes das colunas
     rename_map = {
         "ESTACAO": "estacao",
         "DATA (YYYY-MM-DD)": "data",
@@ -137,7 +137,7 @@ def preparar_dataframe(df_raw: pd.DataFrame, df_stations: pd.DataFrame) -> pd.Da
     df_raw["data"] = pd.to_datetime(df_raw["data"], errors="coerce")
     df_raw["hora_utc"] = pd.to_numeric(df_raw["hora_utc"], errors="coerce")
 
-    # Definir lista de colunas numéricas climáticas (serão limpas)
+    # Definir lista de colunas numéricas climáticas. Pesquisar depois os significados
     colunas_numericas = [
         "precipitacao_mm", "pressao_estacao_mb", "pressao_max_mb", "pressao_min_mb",
         "radiacao_wm2", "temp_bulbo_seco_c", "temp_orvalho_c", "temp_max_c", "temp_min_c",
@@ -150,7 +150,7 @@ def preparar_dataframe(df_raw: pd.DataFrame, df_stations: pd.DataFrame) -> pd.Da
             # TRATAMENTO CRÍTICO: remover sentinelas -9999
             df_raw.loc[df_raw[col] <= -9000, col] = np.nan
 
-    # Remover linhas sem data
+    
     df_raw = df_raw.dropna(subset=["data"]).copy()
 
     # Partes da data
@@ -165,7 +165,7 @@ def preparar_dataframe(df_raw: pd.DataFrame, df_stations: pd.DataFrame) -> pd.Da
     print("\nExemplo de colunas de data e estacao_ano:")
     print(df_raw[["data", "ano", "mes", "dia", "hora_utc", "hora", "estacao_ano"]].head())
 
-    # Merge com cadastro de estações
+    
     df = df_raw.merge(
         df_stations[["estacao", "uf", "regiao", "latitude", "longitude", "altitude_m"]],
         on="estacao",
@@ -191,7 +191,7 @@ def preparar_dataframe(df_raw: pd.DataFrame, df_stations: pd.DataFrame) -> pd.Da
     print("\nProporções de choveu:")
     print(df["choveu"].value_counts(normalize=True).rename("proportion"))
 
-    # Preencher NAs numéricos restantes com mediana (menos precipitação, já tratada)
+    
     cols_para_preencher = [
         "pressao_estacao_mb", "pressao_max_mb", "pressao_min_mb", "radiacao_wm2",
         "temp_bulbo_seco_c", "temp_orvalho_c", "temp_max_c", "temp_min_c",
@@ -290,7 +290,7 @@ def analise_multivariada(df: pd.DataFrame, plots_dir: str, outputs_dir: str):
 def visualizacoes(df: pd.DataFrame, plots_dir: str):
     print("\n=== VISUALIZAÇÕES ===")
 
-    # 1) Boxplot de precipitação por estação do ano (apenas registros com chuva)
+    # 1) Boxplot de precipitação por estação do ano (apenas registros com chuva) vai ser dificil colocar no pwer BI
     df_precip = df[df["precipitacao_mm"] > 0].copy()
     if not df_precip.empty:
         plt.figure(figsize=(8, 5))
@@ -309,7 +309,7 @@ def visualizacoes(df: pd.DataFrame, plots_dir: str):
         plt.close()
         print("Gráfico salvo:", caminho_box)
 
-    # 2) Barras - proporção de registros com chuva por estação do ano
+    # proporção de registros com chuva por estação do ano
     prop_chuva_estacao = (
         df.groupby("estacao_ano")["choveu"]
         .mean()
@@ -326,7 +326,7 @@ def visualizacoes(df: pd.DataFrame, plots_dir: str):
     plt.close()
     print("Gráfico salvo:", caminho_bar)
 
-    # 3) Linha - temperatura média por hora do dia
+    #  temperatura média por hora do dia
     temp_hora = df.groupby("hora")["temp_bulbo_seco_c"].mean().sort_index()
     plt.figure(figsize=(8, 4))
     temp_hora.plot(kind="line")
@@ -375,7 +375,7 @@ def modelos_classificacao(df: pd.DataFrame, outputs_dir: str):
 
     resultados = []
 
-    # 1) Logistic Regression (balanceada)
+    # 1) Logistic Regression Critério exigido pelo professor
     print("\n--- Treinando modelo: Logistic Regression ---")
     logreg = LogisticRegression(max_iter=1500, class_weight="balanced")
     logreg.fit(X_train_scaled, y_train)
@@ -388,7 +388,7 @@ def modelos_classificacao(df: pd.DataFrame, outputs_dir: str):
     print(confusion_matrix(y_test, y_pred_log))
     resultados.append({"modelo": "Logistic Regression", "acuracia": acc_log})
 
-    # 2) Random Forest (balanceada por subamostra)
+    # 2) Random Forest 
     print("\n--- Treinando modelo: Random Forest ---")
     rf = RandomForestClassifier(
         n_estimators=250, random_state=42, n_jobs=-1, class_weight="balanced_subsample"
@@ -403,7 +403,7 @@ def modelos_classificacao(df: pd.DataFrame, outputs_dir: str):
     print(confusion_matrix(y_test, y_pred_rf))
     resultados.append({"modelo": "Random Forest", "acuracia": acc_rf})
 
-    # 3) KNN (baseline)
+    # 3) KNN
     print("\n--- Treinando modelo: KNN ---")
     knn = KNeighborsClassifier(n_neighbors=15)
     knn.fit(X_train_scaled, y_train)
@@ -431,7 +431,7 @@ def main():
 
     outputs_dir, plots_dir = garantir_pastas(base_dir)
 
-    # Listar CSVs
+ 
     csv_files = [f for f in os.listdir(data_dir) if f.lower().endswith(".csv")]
     print(">>> Arquivos encontrados:")
     for f in csv_files:
