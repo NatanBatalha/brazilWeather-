@@ -1,4 +1,4 @@
 modelo,acuracia
-Logistic Regression,0.9538
-Random Forest,0.9598
-KNN,0.9506
+Logistic Regression,0.762722
+Random Forest,0.945444
+KNN,0.940222

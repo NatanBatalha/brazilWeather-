@@ -1,457 +1,469 @@
 import os
-import glob
-
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 from sklearn.linear_model import LogisticRegression
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.neighbors import KNeighborsClassifier
 
-pd.set_option("display.max_columns", 100)
-sns.set(style="whitegrid")
-plt.rcParams["figure.figsize"] = (8, 4)
+pd.set_option("display.max_columns", 50)
+pd.set_option("display.width", 200)
 
 
-def main():
-    print(">>> Iniciando análise do clima (brazilWeather)")
+def garantir_pastas(base_dir: str):
+    outputs_dir = os.path.join(base_dir, "outputs")
+    plots_dir = os.path.join(base_dir, "plots")
+    os.makedirs(outputs_dir, exist_ok=True)
+    os.makedirs(plots_dir, exist_ok=True)
+    return outputs_dir, plots_dir
 
-    # Pastas
-    data_folder = "./data"
-    output_folder = "./outputs"
-    plots_folder = "./plots"
 
-    os.makedirs(output_folder, exist_ok=True)
-    os.makedirs(plots_folder, exist_ok=True)
+def definir_estacao_ano_br(mes: int) -> str:
+    if mes in (12, 1, 2):
+        return "verao"
+    if mes in (3, 4, 5):
+        return "outono"
+    if mes in (6, 7, 8):
+        return "inverno"
+    if mes in (9, 10, 11):
+        return "primavera"
+    return "desconhecida"
 
-    # ------------------------------------------------------------------
-    # 1. Listar arquivos disponíveis
-    # ------------------------------------------------------------------
-    print(f"Caminho da pasta de dados: {os.path.abspath(data_folder)}")
 
-    all_files = glob.glob(os.path.join(data_folder, "*.csv"))
-    print(">>> Arquivos encontrados:")
-    for f in all_files:
-        print(" -", f)
-
-    print("Quantidade de arquivos CSV encontrados:", len(all_files))
-
-    codes_file = None
-    weather_file = None
-
-    for f in all_files:
-        nome = os.path.basename(f).lower()
-        if "codes" in nome:
-            codes_file = f
-        elif "weather" in nome:
-            weather_file = f
-
-    print("\nArquivo de CÓDIGOS de estação:", codes_file)
-    print("Arquivo de DADOS de clima    :", weather_file)
-
-    if codes_file is None or weather_file is None:
-        print("!!! Não consegui identificar os dois arquivos necessários (codes e weather).")
-        return
-
-    # ------------------------------------------------------------------
-    # 2. Ler df_stations (estações) com sep=';'
-    # ------------------------------------------------------------------
-    df_stations = pd.read_csv(codes_file, sep=";")
+def carregar_estacoes(caminho_stations: str) -> pd.DataFrame:
+    print("\nArquivo de CÓDIGOS de estação:", caminho_stations)
+    df_stations = pd.read_csv(
+        caminho_stations,
+        sep=";",
+        encoding="latin1",
+    )
     print("\n>>> df_stations (estações) lido com sucesso!")
     print("Formato:", df_stations.shape)
     print(df_stations.head())
     print("\nColunas de df_stations:", list(df_stations.columns))
 
-    # Renomear colunas para nomes mais amigáveis
-    df_stations = df_stations.rename(
-        columns={
-            "REGIAO": "regiao",
-            "UF": "uf",
-            "ESTACAO": "nome_estacao",
-            "CODIGO": "estacao",
-            "LATITUDE": "latitude",
-            "LONGITUDE": "longitude",
-            "ALTITUDE": "altitude_m",
-        }
-    )
+    rename_map = {
+        "REGIAO": "regiao",
+        "UF": "uf",
+        "ESTACAO": "nome_estacao",
+        "CODIGO": "estacao",
+        "LATITUDE": "latitude",
+        "LONGITUDE": "longitude",
+        "ALTITUDE": "altitude_m",
+    }
+    df_stations = df_stations.rename(columns=rename_map)
+
+    # Garantir tipos numéricos
+    for col in ["latitude", "longitude", "altitude_m"]:
+        df_stations[col] = pd.to_numeric(df_stations[col], errors="coerce")
 
     print("\nColunas renomeadas de df_stations:", list(df_stations.columns))
+    return df_stations
 
-    # ------------------------------------------------------------------
-    # 3. Ler uma AMOSTRA de df_raw (dados climáticos) com sep=';'
-    # ------------------------------------------------------------------
-    print("\n>>> Lendo AMOSTRA do arquivo de dados climáticos (100k linhas)...")
-    df_raw = pd.read_csv(
-        weather_file,
+
+def carregar_dados_clima_amostrado(
+    caminho_dados: str,
+    frac_por_chunk: float = 0.02,
+    max_linhas_final: int = 150000,
+) -> pd.DataFrame:
+    print("\nArquivo de DADOS de clima   :", caminho_dados)
+    print("\n>>> Lendo dados climáticos com amostragem distribuída ao longo de TODO o arquivo...")
+    chunksize = 200_000
+    reader = pd.read_csv(
+        caminho_dados,
         sep=";",
-        nrows=100_000,      # você pode aumentar/diminuir se quiser
+        encoding="latin1",
         low_memory=False,
+        chunksize=chunksize,
     )
-    print(">>> df_raw lido com sucesso!")
-    print("Formato da amostra:", df_raw.shape)
+
+    amostras = []
+    total_amostras = 0
+    for i, chunk in enumerate(reader, start=1):
+        linhas_chunk = len(chunk)
+        sample_n = max(1, int(linhas_chunk * frac_por_chunk))
+        sample_chunk = chunk.sample(n=sample_n, random_state=42 + i)
+        amostras.append(sample_chunk)
+        total_amostras += sample_n
+        print(f"   Chunk {i}: {linhas_chunk} linhas, amostradas {sample_n} (total amostras acumuladas: {total_amostras})")
+
+    df_raw = pd.concat(amostras, ignore_index=True)
+    print("\n>>> df_raw (amostra distribuída) lido com sucesso!")
+    print("Formato da amostra antes de downsample:", df_raw.shape)
     print("\nPrimeiras linhas de df_raw:")
     print(df_raw.head())
     print("\nColunas de df_raw:", list(df_raw.columns))
 
-    # Renomear colunas do clima
-    df_raw = df_raw.rename(
-        columns={
-            "ESTACAO": "estacao",
-            "DATA (YYYY-MM-DD)": "data",
-            "HORA (UTC)": "hora_utc",
-            "PRECIPITACAO TOTAL HORARIO (mm)": "precipitacao_mm",
-            "PRESSAO ATMOSFERICA AO NIVEL DA ESTACAO, HORARIA (mB)": "pressao_estacao_mb",
-            "PRESSAO ATMOSFERICA MAX.NA HORA ANT. (AUT) (mB)": "pressao_max_mb",
-            "PRESSAO ATMOSFERICA MIN. NA HORA ANT. (AUT) (mB)": "pressao_min_mb",
-            "RADIACAO GLOBAL (W/m2)": "radiacao_wm2",
-            "TEMPERATURA DO AR - BULBO SECO, HORARIA (C)": "temp_bulbo_seco_c",
-            "TEMPERATURA DO PONTO DE ORVALHO (C)": "temp_orvalho_c",
-            "TEMPERATURA MAXIMA NA HORA ANT. (AUT) (C)": "temp_max_c",
-            "TEMPERATURA MINIMA NA HORA ANT. (AUT) (C)": "temp_min_c",
-            "TEMPERATURA ORVALHO MAX. NA HORA ANT. (AUT) (C)": "temp_orvalho_max_c",
-            "TEMPERATURA ORVALHO MIN. NA HORA ANT. (AUT) (C)": "temp_orvalho_min_c",
-            "UMIDADE REL. MAX. NA HORA ANT. (AUT) (%)": "umid_max_pct",
-            "UMIDADE REL. MIN. NA HORA ANT. (AUT) (%)": "umid_min_pct",
-            "UMIDADE RELATIVA DO AR, HORARIA (%)": "umid_pct",
-            "VENTO, DIRECAO HORARIA (gr)": "vento_dir_graus",
-            "VENTO, RAJADA MAXIMA (m/s)": "vento_rajada_ms",
-            "VENTO, VELOCIDADE HORARIA (m/s)": "vento_vel_ms",
-        }
+    if len(df_raw) > max_linhas_final:
+        df_raw = df_raw.sample(n=max_linhas_final, random_state=42).reset_index(drop=True)
+        print(f"\n>>> Amostra reduzida para {df_raw.shape} linhas para facilitar análise.")
+
+    return df_raw
+
+
+def preparar_dataframe(df_raw: pd.DataFrame, df_stations: pd.DataFrame) -> pd.DataFrame:
+    # Renomear colunas
+    rename_map = {
+        "ESTACAO": "estacao",
+        "DATA (YYYY-MM-DD)": "data",
+        "HORA (UTC)": "hora_utc",
+        "PRECIPITACAO TOTAL HORARIO (mm)": "precipitacao_mm",
+        "PRESSAO ATMOSFERICA AO NIVEL DA ESTACAO, HORARIA (mB)": "pressao_estacao_mb",
+        "PRESSAO ATMOSFERICA MAX.NA HORA ANT. (AUT) (mB)": "pressao_max_mb",
+        "PRESSAO ATMOSFERICA MIN. NA HORA ANT. (AUT) (mB)": "pressao_min_mb",
+        "RADIACAO GLOBAL (W/m2)": "radiacao_wm2",
+        "TEMPERATURA DO AR - BULBO SECO, HORARIA (C)": "temp_bulbo_seco_c",
+        "TEMPERATURA DO PONTO DE ORVALHO (C)": "temp_orvalho_c",
+        "TEMPERATURA MAXIMA NA HORA ANT. (AUT) (C)": "temp_max_c",
+        "TEMPERATURA MINIMA NA HORA ANT. (AUT) (C)": "temp_min_c",
+        "TEMPERATURA ORVALHO MAX. NA HORA ANT. (AUT) (C)": "temp_orvalho_max_c",
+        "TEMPERATURA ORVALHO MIN. NA HORA ANT. (AUT) (C)": "temp_orvalho_min_c",
+        "UMIDADE REL. MAX. NA HORA ANT. (AUT) (%)": "umid_max_pct",
+        "UMIDADE REL. MIN. NA HORA ANT. (AUT) (%)": "umid_min_pct",
+        "UMIDADE RELATIVA DO AR, \nHORARIA (%)": "umid_pct",
+        "UMIDADE RELATIVA DO AR, HORARIA (%)": "umid_pct",
+        "VENTO, DIRECAO HORARIA (gr)": "vento_dir_graus",
+        "VENTO, RAJADA MAXIMA (m/s)": "vento_rajada_ms",
+        "VENTO, VELOCIDADE HORARIA (m/s)": "vento_vel_ms",
+    }
+    df_raw = df_raw.rename(columns=rename_map)
+
+    # Converter tipos
+    df_raw["data"] = pd.to_datetime(df_raw["data"], errors="coerce")
+    df_raw["hora_utc"] = pd.to_numeric(df_raw["hora_utc"], errors="coerce")
+
+    # Definir lista de colunas numéricas climáticas (serão limpas)
+    colunas_numericas = [
+        "precipitacao_mm", "pressao_estacao_mb", "pressao_max_mb", "pressao_min_mb",
+        "radiacao_wm2", "temp_bulbo_seco_c", "temp_orvalho_c", "temp_max_c", "temp_min_c",
+        "temp_orvalho_max_c", "temp_orvalho_min_c", "umid_max_pct", "umid_min_pct", "umid_pct",
+        "vento_dir_graus", "vento_rajada_ms", "vento_vel_ms"
+    ]
+    for col in colunas_numericas:
+        if col in df_raw.columns:
+            df_raw[col] = pd.to_numeric(df_raw[col], errors="coerce")
+            # TRATAMENTO CRÍTICO: remover sentinelas -9999
+            df_raw.loc[df_raw[col] <= -9000, col] = np.nan
+
+    # Remover linhas sem data
+    df_raw = df_raw.dropna(subset=["data"]).copy()
+
+    # Partes da data
+    df_raw["ano"] = df_raw["data"].dt.year
+    df_raw["mes"] = df_raw["data"].dt.month
+    df_raw["dia"] = df_raw["data"].dt.day
+    df_raw["estacao_ano"] = df_raw["mes"].apply(definir_estacao_ano_br)
+
+    # Hora 0–23 para facilitar no BI
+    df_raw["hora"] = (df_raw["hora_utc"] // 100).astype("Int64")
+
+    print("\nExemplo de colunas de data e estacao_ano:")
+    print(df_raw[["data", "ano", "mes", "dia", "hora_utc", "hora", "estacao_ano"]].head())
+
+    # Merge com cadastro de estações
+    df = df_raw.merge(
+        df_stations[["estacao", "uf", "regiao", "latitude", "longitude", "altitude_m"]],
+        on="estacao",
+        how="left",
     )
 
-    print("\nColunas renomeadas de df_raw:", list(df_raw.columns))
-
-    # ------------------------------------------------------------------
-    # 4. Merge clima + estações
-    # ------------------------------------------------------------------
-    df = df_raw.merge(df_stations, on="estacao", how="left")
     print("\n>>> df (clima + info estação) após merge:")
     print("Formato:", df.shape)
     print(df[["estacao", "uf", "regiao"]].head())
 
-    # ------------------------------------------------------------------
-    # 5. Engenharia de atributos de data
-    # ------------------------------------------------------------------
-    df["data"] = pd.to_datetime(df["data"], errors="coerce")
-    df["ano"] = df["data"].dt.year
-    df["mes"] = df["data"].dt.month
-    df["dia"] = df["data"].dt.day
+    # Codificar categóricas
+    for col_cat in ["uf", "regiao", "estacao_ano"]:
+        df[f"{col_cat}_cod"] = df[col_cat].astype("category").cat.codes
 
-    # Converter hora_utc para numérico (pode vir como string)
-    df["hora_utc"] = pd.to_numeric(df["hora_utc"], errors="coerce")
-
-    def estacao_do_ano(mes):
-        if pd.isna(mes):
-            return pd.NA
-        mes = int(mes)
-        if mes in (12, 1, 2):
-            return "verao"
-        if mes in (3, 4, 5):
-            return "outono"
-        if mes in (6, 7, 8):
-            return "inverno"
-        if mes in (9, 10, 11):
-            return "primavera"
-        return pd.NA
-
-    df["estacao_ano"] = df["mes"].apply(estacao_do_ano)
-
-    print("\nExemplo de colunas de data e estacao_ano:")
-    print(df[["data", "ano", "mes", "dia", "hora_utc", "estacao_ano"]].head())
-
-    # ------------------------------------------------------------------
-    # 6. Variável alvo: choveu (classificação)
-    # ------------------------------------------------------------------
-    df["precipitacao_mm"] = pd.to_numeric(df["precipitacao_mm"], errors="coerce")
+    # Variável alvo choveu
+    # (depois do tratamento de NaN: se precipitação não foi medida, assume 0)
+    if "precipitacao_mm" in df.columns:
+        df["precipitacao_mm"] = df["precipitacao_mm"].fillna(0)
     df["choveu"] = (df["precipitacao_mm"] > 0).astype(int)
 
     print("\nDistribuição de choveu (0=sem chuva, 1=com chuva):")
     print(df["choveu"].value_counts())
     print("\nProporções de choveu:")
-    print(df["choveu"].value_counts(normalize=True))
+    print(df["choveu"].value_counts(normalize=True).rename("proportion"))
 
-    # Salvar uma amostra preparada para usar no Power BI
-    cols_export = [
-        "data",
-        "hora_utc",
-        "uf",
-        "regiao",
-        "estacao_ano",
-        "latitude",
-        "longitude",
-        "altitude_m",
-        "precipitacao_mm",
-        "choveu",
-        "temp_bulbo_seco_c",
-        "temp_max_c",
-        "temp_min_c",
-        "temp_orvalho_c",
-        "umid_pct",
-        "umid_max_pct",
-        "umid_min_pct",
-        "pressao_estacao_mb",
-        "radiacao_wm2",
-        "vento_vel_ms",
-        "vento_rajada_ms",
+    # Preencher NAs numéricos restantes com mediana (menos precipitação, já tratada)
+    cols_para_preencher = [
+        "pressao_estacao_mb", "pressao_max_mb", "pressao_min_mb", "radiacao_wm2",
+        "temp_bulbo_seco_c", "temp_orvalho_c", "temp_max_c", "temp_min_c",
+        "temp_orvalho_max_c", "temp_orvalho_min_c", "umid_max_pct", "umid_min_pct",
+        "umid_pct", "vento_dir_graus", "vento_rajada_ms", "vento_vel_ms",
+        "altitude_m", "latitude", "longitude", "hora_utc"
     ]
-    cols_export = [c for c in cols_export if c in df.columns]
-    df_export = df[cols_export].copy()
-    export_path = os.path.join(output_folder, "df_amostra_trabalho.csv")
-    df_export.to_csv(export_path, index=False)
-    print(f"\nArquivo para Power BI salvo em: {export_path}")
+    cols_exist = [c for c in cols_para_preencher if c in df.columns]
+    df[cols_exist] = df[cols_exist].fillna(df[cols_exist].median())
 
-    # ------------------------------------------------------------------
-    # 7. Análise Univariada (10 variáveis)
-    # ------------------------------------------------------------------
+    return df
+
+
+def analise_univariada(df: pd.DataFrame, plots_dir: str, outputs_dir: str):
     print("\n=== ANÁLISE UNIVARIADA ===")
-
-    univ_candidates = [
-        "temp_bulbo_seco_c",
-        "temp_max_c",
-        "temp_min_c",
-        "temp_orvalho_c",
-        "umid_pct",
-        "umid_max_pct",
-        "umid_min_pct",
-        "pressao_estacao_mb",
-        "radiacao_wm2",
-        "vento_vel_ms",
-        "altitude_m",
+    variaveis = [
+        "temp_bulbo_seco_c", "temp_max_c", "temp_min_c", "temp_orvalho_c",
+        "umid_pct", "umid_max_pct", "umid_min_pct",
+        "pressao_estacao_mb", "radiacao_wm2",
+        "vento_vel_ms", "altitude_m",
     ]
+    print("Variáveis selecionadas para univariada:", variaveis)
 
-    univ_vars = [c for c in univ_candidates if c in df.columns]
-    print("Variáveis selecionadas para univariada:", univ_vars)
-
-    univ_rows = []
-
-    for col in univ_vars:
-        serie = pd.to_numeric(df[col], errors="coerce").dropna()
+    linhas = []
+    for col in variaveis:
+        if col not in df.columns:
+            continue
+        serie = df[col].dropna()
         if serie.empty:
             continue
 
-        moda = serie.mode()
-        moda_val = moda.iloc[0] if not moda.empty else np.nan
+        media = serie.mean()
+        mediana = serie.median()
+        moda = serie.mode().iloc[0] if not serie.mode().empty else np.nan
+        desvio = serie.std()
+        p25 = serie.quantile(0.25)
+        p50 = serie.quantile(0.50)
+        p75 = serie.quantile(0.75)
 
-        row = {
-            "variavel": col,
-            "media": serie.mean(),
-            "mediana": serie.median(),
-            "moda": moda_val,
-            "desvio_padrao": serie.std(),
-            "p25": serie.quantile(0.25),
-            "p50": serie.quantile(0.50),
-            "p75": serie.quantile(0.75),
-        }
-        univ_rows.append(row)
+        linhas.append(
+            dict(variavel=col, media=media, mediana=mediana, moda=moda,
+                 desvio_padrao=desvio, p25=p25, p50=p50, p75=p75)
+        )
 
-        # Histograma salvo em PNG
-        plt.figure()
-        sns.histplot(serie, kde=True)
+        plt.figure(figsize=(6, 4))
+        sns.histplot(serie, bins=30, kde=False)
         plt.title(f"Histograma - {col}")
         plt.xlabel(col)
         plt.ylabel("Frequência")
         plt.tight_layout()
-        hist_path = os.path.join(plots_folder, f"hist_{col}.png")
-        plt.savefig(hist_path)
+        caminho_hist = os.path.join(plots_dir, f"hist_{col}.png")
+        plt.savefig(caminho_hist)
         plt.close()
-        print(f"Histograma salvo: {hist_path}")
+        print(f"Histograma salvo: {caminho_hist}")
 
-    df_univ = pd.DataFrame(univ_rows)
-    univ_path = os.path.join(output_folder, "univariada_resumo.csv")
-    df_univ.to_csv(univ_path, index=False)
-    print("\nResumo univariado salvo em:", univ_path)
-    print(df_univ)
+    df_uni = pd.DataFrame(linhas)
+    caminho_resumo = os.path.join(outputs_dir, "univariada_resumo.csv")
+    df_uni.to_csv(caminho_resumo, index=False, float_format="%.6f")
+    print("\nResumo univariado salvo em:", caminho_resumo)
+    print(df_uni)
 
-    # ------------------------------------------------------------------
-    # 8. Análise Multivariada - Correlação de Pearson
-    # ------------------------------------------------------------------
+
+def analise_multivariada(df: pd.DataFrame, plots_dir: str, outputs_dir: str):
     print("\n=== ANÁLISE MULTIVARIADA (CORRELAÇÃO DE PEARSON) ===")
+    cols_corr = [
+        "precipitacao_mm", "temp_bulbo_seco_c", "temp_max_c", "temp_min_c",
+        "temp_orvalho_c", "temp_orvalho_max_c", "temp_orvalho_min_c",
+        "umid_pct", "umid_max_pct", "umid_min_pct",
+        "pressao_estacao_mb", "pressao_max_mb", "pressao_min_mb",
+        "radiacao_wm2", "vento_vel_ms", "vento_rajada_ms",
+        "altitude_m", "latitude", "longitude",
+        "ano", "mes", "dia", "hora_utc",
+        "uf_cod", "regiao_cod", "estacao_ano_cod",
+        "choveu",
+    ]
+    cols_corr = [c for c in cols_corr if c in df.columns]
+    corr = df[cols_corr].corr(method="pearson")
 
-    # Converter categóricas relevantes em códigos numéricos
-    df_corr = df.copy()
-    for cat_col in ["uf", "regiao", "estacao_ano"]:
-        if cat_col in df_corr.columns:
-            df_corr[cat_col + "_cod"] = df_corr[cat_col].astype("category").cat.codes
+    caminho_corr = os.path.join(outputs_dir, "correlacao_pearson.csv")
+    corr.to_csv(caminho_corr, float_format="%.6f")
+    print("Matriz de correlação salva em:", caminho_corr)
 
-    numeric_cols = df_corr.select_dtypes(include=["number"]).columns
-    corr = df_corr[numeric_cols].corr(method="pearson")
+    print("\nCorrelação de Pearson com a variável alvo 'choveu':")
+    print(corr["choveu"].sort_values(ascending=False))
 
-    corr_path = os.path.join(output_folder, "correlacao_pearson.csv")
-    corr.to_csv(corr_path)
-    print("Matriz de correlação salva em:", corr_path)
-
-    if "choveu" in corr.columns:
-        print("\nCorrelação de Pearson com a variável alvo 'choveu':")
-        print(corr["choveu"].sort_values(ascending=False))
-
-    # Heatmap de correlação
     plt.figure(figsize=(12, 10))
-    sns.heatmap(corr, cmap="coolwarm", center=0)
-    plt.title("Matriz de Correlação de Pearson")
+    sns.heatmap(corr, cmap="RdBu_r", center=0, annot=False)
+    plt.title("Matriz de correlação de Pearson")
     plt.tight_layout()
-    heatmap_path = os.path.join(plots_folder, "correlacao_pearson_heatmap.png")
-    plt.savefig(heatmap_path)
+    caminho_heatmap = os.path.join(plots_dir, "correlacao_pearson_heatmap.png")
+    plt.savefig(caminho_heatmap)
     plt.close()
-    print("Heatmap de correlação salvo em:", heatmap_path)
+    print("Heatmap de correlação salvo em:", caminho_heatmap)
 
-    # ------------------------------------------------------------------
-    # 9. Visualizações (exploratória e explicativa)
-    # ------------------------------------------------------------------
+
+def visualizacoes(df: pd.DataFrame, plots_dir: str):
     print("\n=== VISUALIZAÇÕES ===")
 
-    # Amostra para gráficos (pra não pesar)
-    if len(df) > 20_000:
-        df_plot = df.sample(20_000, random_state=42)
-    else:
-        df_plot = df.copy()
-
-    # 9.1 Boxplot de precipitação por estação do ano (exploratória)
-    if "estacao_ano" in df_plot.columns:
+    # 1) Boxplot de precipitação por estação do ano (apenas registros com chuva)
+    df_precip = df[df["precipitacao_mm"] > 0].copy()
+    if not df_precip.empty:
         plt.figure(figsize=(8, 5))
-        sns.boxplot(data=df_plot, x="estacao_ano", y="precipitacao_mm")
-        plt.title("Precipitação por Estação do Ano")
+        sns.boxplot(
+            x="estacao_ano",
+            y="precipitacao_mm",
+            data=df_precip,
+            order=["verao", "outono", "inverno", "primavera"],
+        )
+        plt.title("Precipitação (mm) por estação do ano (registros com chuva)")
         plt.xlabel("Estação do ano")
         plt.ylabel("Precipitação (mm)")
         plt.tight_layout()
-        box_path = os.path.join(plots_folder, "boxplot_precipitacao_por_estacao_ano.png")
-        plt.savefig(box_path)
+        caminho_box = os.path.join(plots_dir, "boxplot_precipitacao_por_estacao_ano.png")
+        plt.savefig(caminho_box)
         plt.close()
-        print("Gráfico salvo:", box_path)
+        print("Gráfico salvo:", caminho_box)
 
-    # 9.2 Proporção de registros com chuva por estação do ano (explicativa)
-    if "choveu" in df_plot.columns and "estacao_ano" in df_plot.columns:
-        chuva_por_estacao = df_plot.groupby("estacao_ano")["choveu"].mean().sort_index()
-        plt.figure(figsize=(8, 5))
-        chuva_por_estacao.plot(kind="bar")
-        plt.title("Proporção de registros com chuva por estação do ano")
-        plt.xlabel("Estação do ano")
-        plt.ylabel("Proporção de choveu")
-        plt.tight_layout()
-        bar_path = os.path.join(plots_folder, "barra_choveu_por_estacao_ano.png")
-        plt.savefig(bar_path)
-        plt.close()
-        print("Gráfico salvo:", bar_path)
+    # 2) Barras - proporção de registros com chuva por estação do ano
+    prop_chuva_estacao = (
+        df.groupby("estacao_ano")["choveu"]
+        .mean()
+        .reindex(["verao", "outono", "inverno", "primavera"])
+    )
+    plt.figure(figsize=(6, 4))
+    sns.barplot(x=prop_chuva_estacao.index, y=prop_chuva_estacao.values)
+    plt.title("Proporção de registros com chuva por estação do ano")
+    plt.xlabel("Estação do ano")
+    plt.ylabel("Proporção de registros com chuva")
+    plt.tight_layout()
+    caminho_bar = os.path.join(plots_dir, "barra_choveu_por_estacao_ano.png")
+    plt.savefig(caminho_bar)
+    plt.close()
+    print("Gráfico salvo:", caminho_bar)
 
-    # 9.3 Temperatura média por hora do dia (explicativa)
-    if "hora_utc" in df_plot.columns and "temp_bulbo_seco_c" in df_plot.columns:
-        temp_por_hora = (
-            df_plot.groupby("hora_utc")["temp_bulbo_seco_c"]
-            .mean()
-            .sort_index()
-        )
-        plt.figure(figsize=(8, 5))
-        temp_por_hora.plot(kind="line", marker="o")
-        plt.title("Temperatura média por hora (UTC)")
-        plt.xlabel("Hora (UTC)")
-        plt.ylabel("Temperatura do ar (°C)")
-        plt.tight_layout()
-        line_path = os.path.join(plots_folder, "linha_temp_media_por_hora.png")
-        plt.savefig(line_path)
-        plt.close()
-        print("Gráfico salvo:", line_path)
+    # 3) Linha - temperatura média por hora do dia
+    temp_hora = df.groupby("hora")["temp_bulbo_seco_c"].mean().sort_index()
+    plt.figure(figsize=(8, 4))
+    temp_hora.plot(kind="line")
+    plt.title("Temperatura média do ar por hora do dia (UTC)")
+    plt.xlabel("Hora do dia (0–23)")
+    plt.ylabel("Temperatura média (°C)")
+    plt.tight_layout()
+    caminho_linha = os.path.join(plots_dir, "linha_temp_media_por_hora.png")
+    plt.savefig(caminho_linha)
+    plt.close()
+    print("Gráfico salvo:", caminho_linha)
 
-    # ------------------------------------------------------------------
-    # 10. Modelos de Classificação (ML)
-    # ------------------------------------------------------------------
+
+def modelos_classificacao(df: pd.DataFrame, outputs_dir: str):
     print("\n=== MODELOS DE CLASSIFICAÇÃO (ML) ===")
 
-    if "choveu" not in df.columns:
-        print("Não há coluna 'choveu' no dataframe. Não é possível treinar modelos.")
-        return
-
-    df_ml = df.copy()
-
-    # Codificar categóricas
-    cat_cols = []
-    for cat in ["uf", "regiao", "estacao_ano"]:
-        if cat in df_ml.columns:
-            code_col = cat + "_cod"
-            df_ml[code_col] = df_ml[cat].astype("category").cat.codes
-            cat_cols.append(code_col)
-
-    # Selecionar features numéricas relevantes
-    num_features_candidates = [
-        "temp_bulbo_seco_c",
-        "temp_max_c",
-        "temp_min_c",
-        "temp_orvalho_c",
-        "umid_pct",
-        "umid_max_pct",
-        "umid_min_pct",
-        "pressao_estacao_mb",
-        "radiacao_wm2",
-        "vento_vel_ms",
-        "vento_rajada_ms",
-        "hora_utc",
-        "mes",
-        "ano",
-        "altitude_m",
-        "latitude",
-        "longitude",
+    features = [
+        "temp_bulbo_seco_c", "temp_max_c", "temp_min_c", "temp_orvalho_c",
+        "umid_pct", "umid_max_pct", "umid_min_pct",
+        "pressao_estacao_mb", "radiacao_wm2",
+        "vento_vel_ms", "vento_rajada_ms",
+        "hora_utc", "mes", "ano",
+        "altitude_m", "latitude", "longitude",
+        "uf_cod", "regiao_cod", "estacao_ano_cod",
     ]
-    num_features = [c for c in num_features_candidates if c in df_ml.columns]
+    features = [f for f in features if f in df.columns]
+    print("Features usadas no ML:", features)
 
-    feature_cols = num_features + cat_cols
-    print("Features usadas no ML:", feature_cols)
-
-    X = df_ml[feature_cols].apply(pd.to_numeric, errors="coerce")
-    y = df_ml["choveu"]
-
-    # Remover linhas onde y é NaN
-    mask = y.notna()
-    X = X[mask]
-    y = y[mask]
-
-    # Tratar NaNs em X com mediana
-    X = X.fillna(X.median(numeric_only=True))
-
-    # Amostra opcional para acelerar (por ex., 50k registros)
-    if len(X) > 50_000:
-        X_sample = X.sample(50_000, random_state=42)
-        y_sample = y.loc[X_sample.index]
+    # Amostra para ML se necessário
+    max_linhas_ml = 120_000
+    if len(df) > max_linhas_ml:
+        df_ml = df.sample(n=max_linhas_ml, random_state=42)
     else:
-        X_sample = X
-        y_sample = y
+        df_ml = df.copy()
+
+    X = df_ml[features].copy()
+    y = df_ml["choveu"].copy()
 
     X_train, X_test, y_train, y_test = train_test_split(
-        X_sample, y_sample, test_size=0.3, random_state=42, stratify=y_sample
+        X, y, test_size=0.15, random_state=42, stratify=y
     )
 
-    modelos = {
-        "Logistic Regression": LogisticRegression(max_iter=1000, n_jobs=-1),
-        "Random Forest": RandomForestClassifier(
-            n_estimators=200, random_state=42, n_jobs=-1
-        ),
-        "KNN": KNeighborsClassifier(n_neighbors=15),
-    }
+    scaler = StandardScaler()
+    X_train_scaled = scaler.fit_transform(X_train)
+    X_test_scaled = scaler.transform(X_test)
 
-    resultados_ml = []
+    resultados = []
 
-    for nome_modelo, modelo in modelos.items():
-        print(f"\n--- Treinando modelo: {nome_modelo} ---")
-        modelo.fit(X_train, y_train)
-        y_pred = modelo.predict(X_test)
+    # 1) Logistic Regression (balanceada)
+    print("\n--- Treinando modelo: Logistic Regression ---")
+    logreg = LogisticRegression(max_iter=1500, class_weight="balanced")
+    logreg.fit(X_train_scaled, y_train)
+    y_pred_log = logreg.predict(X_test_scaled)
+    acc_log = accuracy_score(y_test, y_pred_log)
+    print("Acurácia:", round(acc_log, 4))
+    print("Classification report:")
+    print(classification_report(y_test, y_pred_log))
+    print("Matriz de confusão:")
+    print(confusion_matrix(y_test, y_pred_log))
+    resultados.append({"modelo": "Logistic Regression", "acuracia": acc_log})
 
-        acc = accuracy_score(y_test, y_pred)
-        print(f"Acurácia: {acc:.4f}")
-        print("Classification report:")
-        print(classification_report(y_test, y_pred))
+    # 2) Random Forest (balanceada por subamostra)
+    print("\n--- Treinando modelo: Random Forest ---")
+    rf = RandomForestClassifier(
+        n_estimators=250, random_state=42, n_jobs=-1, class_weight="balanced_subsample"
+    )
+    rf.fit(X_train, y_train)
+    y_pred_rf = rf.predict(X_test)
+    acc_rf = accuracy_score(y_test, y_pred_rf)
+    print("Acurácia:", round(acc_rf, 4))
+    print("Classification report:")
+    print(classification_report(y_test, y_pred_rf))
+    print("Matriz de confusão:")
+    print(confusion_matrix(y_test, y_pred_rf))
+    resultados.append({"modelo": "Random Forest", "acuracia": acc_rf})
 
-        cm = confusion_matrix(y_test, y_pred)
-        print("Matriz de confusão:")
-        print(cm)
+    # 3) KNN (baseline)
+    print("\n--- Treinando modelo: KNN ---")
+    knn = KNeighborsClassifier(n_neighbors=15)
+    knn.fit(X_train_scaled, y_train)
+    y_pred_knn = knn.predict(X_test_scaled)
+    acc_knn = accuracy_score(y_test, y_pred_knn)
+    print("Acurácia:", round(acc_knn, 4))
+    print("Classification report:")
+    print(classification_report(y_test, y_pred_knn))
+    print("Matriz de confusão:")
+    print(confusion_matrix(y_test, y_pred_knn))
+    resultados.append({"modelo": "KNN", "acuracia": acc_knn})
 
-        resultados_ml.append({"modelo": nome_modelo, "acuracia": acc})
+    df_res = pd.DataFrame(resultados)
+    caminho_res = os.path.join(outputs_dir, "resultados_modelos_ml.csv")
+    df_res.to_csv(caminho_res, index=False, float_format="%.6f")
+    print("\nResumo dos modelos salvo em:", caminho_res)
+    print(df_res)
 
-    df_resultados_ml = pd.DataFrame(resultados_ml)
-    ml_path = os.path.join(output_folder, "resultados_modelos_ml.csv")
-    df_resultados_ml.to_csv(ml_path, index=False)
-    print("\nResumo dos modelos salvo em:", ml_path)
-    print(df_resultados_ml)
+
+def main():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    print(">>> Iniciando análise do clima (brazilWeather)")
+    data_dir = os.path.join(base_dir, "data")
+    print("Caminho da pasta de dados:", data_dir)
+
+    outputs_dir, plots_dir = garantir_pastas(base_dir)
+
+    # Listar CSVs
+    csv_files = [f for f in os.listdir(data_dir) if f.lower().endswith(".csv")]
+    print(">>> Arquivos encontrados:")
+    for f in csv_files:
+        print(" -", os.path.join("./data", f))
+    print("Quantidade de arquivos CSV encontrados:", len(csv_files))
+
+    # Identificar arquivos
+    stations_file = None
+    dados_file = None
+    for f in csv_files:
+        nome_lower = f.lower()
+        if "codes" in nome_lower or "codigo" in nome_lower:
+            stations_file = os.path.join(data_dir, f)
+        elif "weather" in nome_lower:
+            dados_file = os.path.join(data_dir, f)
+    if stations_file is None or dados_file is None:
+        raise FileNotFoundError("Não encontrei os arquivos de estações e/ou dados climáticos em ./data.")
+
+    df_stations = carregar_estacoes(stations_file)
+    df_raw = carregar_dados_clima_amostrado(dados_file, frac_por_chunk=0.02, max_linhas_final=150000)
+    df = preparar_dataframe(df_raw, df_stations)
+
+    # Export para Power BI
+    caminho_powerbi = os.path.join(outputs_dir, "df_amostra_trabalho.csv")
+    df.to_csv(caminho_powerbi, index=False)
+    print("\nArquivo para Power BI salvo em:", caminho_powerbi)
+
+    # Análises
+    analise_univariada(df, plots_dir, outputs_dir)
+    analise_multivariada(df, plots_dir, outputs_dir)
+    visualizacoes(df, plots_dir)
+    modelos_classificacao(df, outputs_dir)
 
     print("\n>>> Fim da execução do analise_clima.py")
 
